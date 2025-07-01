@@ -76,6 +76,8 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 
 app.post('/webhook', async (req, res) => {
+    console.log('--- PESAN BARU DITERIMA DI /webhook ---'); // <--- TAMBAHKAN BARIS INI
+    console.log('Pengirim:', req.body.From);     
     const twiml = new MessagingResponse();
     const from = req.body.From; 
     const msgBody = req.body.Body.trim(); 
