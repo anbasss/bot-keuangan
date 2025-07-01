@@ -1,4 +1,4 @@
-// Bab 3: Kode Lengkap untuk index.js
+// Bab 3: Kode Lengkap untuk index.js (Versi Final untuk Server)
 
 // Import library yang dibutuhkan
 const express = require('express');
@@ -7,11 +7,23 @@ const { MessagingResponse } = require('twilio').twiml;
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 
 // --- KONFIGURASI ---
+// Semua kunci rahasia akan dibaca dari Environment Variables di Railway
 const PORT = process.env.PORT || 3000;
-// Kredensial Google akan dibaca dari file credentials.json
-const SPREADSHEET_ID = '1mhNDHi-KPOedP-tt6CaOLKKkDO5bZQ9VfyPDRXfsRxw'; // <-- GANTI INI
-const creds = require('./credentials.json');
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID; 
+
+// INI BAGIAN PALING PENTING YANG BERBEDA DARI KODE ANDA
+let creds;
+// Cek apakah variabel GOOGLE_CREDENTIALS ada (di server Railway)
+if (process.env.GOOGLE_CREDENTIALS) {
+    // Jika ada, baca dari sana
+    creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+} else {
+    // Jika tidak ada (saat dijalankan di komputer lokal), baca dari file
+    // Pastikan nama file ini sesuai dengan file .json Anda
+    creds = require('./gen-lang-client-0501007499-f7d012eb3e61.json'); 
+}
 const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
+
 
 // Objek untuk menyimpan state pengguna (biarkan kosong)
 let userState = {};
@@ -42,10 +54,11 @@ async function generateReport() {
     let totalPengeluaran = 0;
 
     rows.forEach(row => {
-        const jumlah = parseFloat(row.Jumlah) || 0;
-        if (row.Jenis === 'Pemasukan') {
+        // Gunakan .get() untuk mengakses data baris dari google-spreadsheet v4
+        const jumlah = parseFloat(row.get('Jumlah')) || 0;
+        if (row.get('Jenis') === 'Pemasukan') {
             totalPemasukan += jumlah;
-        } else if (row.Jenis === 'Pengeluaran') {
+        } else if (row.get('Jenis') === 'Pengeluaran') {
             totalPengeluaran += jumlah;
         }
     });
@@ -59,17 +72,14 @@ async function generateReport() {
 
 // --- LOGIKA UTAMA BOT ---
 
-// Inisialisasi Aplikasi Express
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 
-// Endpoint yang akan dihubungi oleh Twilio setiap ada pesan masuk
 app.post('/webhook', async (req, res) => {
     const twiml = new MessagingResponse();
-    const from = req.body.From; // Nomor pengirim (misal: whatsapp:+62...)
-    const msgBody = req.body.Body.trim(); // Isi pesan
-
-    const currentState = userState[from]; // Cek state pengguna
+    const from = req.body.From; 
+    const msgBody = req.body.Body.trim(); 
+    const currentState = userState[from];
     let replyText = '';
 
     try {
@@ -85,15 +95,14 @@ app.post('/webhook', async (req, res) => {
                     jumlah: jumlah,
                     keterangan: keterangan,
                 };
-
+                
                 await appendToSheet(newRow);
                 replyText = `✅ Berhasil dicatat:\n*${newRow.jenis}:* Rp ${jumlah.toLocaleString('id-ID')} - ${keterangan}`;
-                delete userState[from]; // Kembalikan pengguna ke state normal
+                delete userState[from];
             } else {
                 replyText = 'Format salah. Mohon masukkan lagi.\nContoh: `50000 Gaji dari project`';
             }
         } else {
-            // Logika jika pengguna tidak dalam state apa pun (mengetik perintah)
             switch (msgBody.toLowerCase()) {
                 case '.menu':
                     replyText = 'Selamat datang di Bot Keuangan!\n\nSilakan pilih menu:\n*1*. Isi Pemasukan 💰\n*2*. Isi Pengeluaran 💸\n*3*. Tampilkan Laporan 📊\n\nKetik nomornya untuk memilih.';
@@ -119,12 +128,10 @@ app.post('/webhook', async (req, res) => {
         replyText = 'Maaf, terjadi kesalahan di pihak server. 😔';
     }
 
-    // Mengirim balasan ke pengguna
     twiml.message(replyText);
     res.type('text/xml').send(twiml.toString());
 });
 
-// Menjalankan server
 app.listen(PORT, () => {
     console.log(`Server berjalan di port ${PORT}`);
 });
