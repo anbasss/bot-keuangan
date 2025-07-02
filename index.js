@@ -1,79 +1,49 @@
 // =================================================================
 // KODE LENGKAP BOT KEUANGAN WHATSAPP
-// Versi Final dengan Debugging Startup
+// Versi Final dengan Perbaikan Google Sheets v4
 // =================================================================
 
 // Import library yang dibutuhkan
 const express = require('express');
 const bodyParser = require('body-parser');
-const { MessagingResponse } = require('twilio').twiml;
+const axios = require('axios');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
+const qs = require('qs');
 
-// --- KONFIGURASI DENGAN DEBUGGING ---
+// --- KONFIGURASI ---
 console.log("Memulai proses startup dan konfigurasi...");
-
 const PORT = process.env.PORT || 3000;
-
-// --- Debugging SPREADSHEET_ID ---
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-if (!SPREADSHEET_ID) {
-    console.error("FATAL ERROR: Environment variable SPREADSHEET_ID tidak ditemukan atau kosong!");
-    process.exit(1); // Langsung hentikan aplikasi jika ID tidak ada
-}
-console.log(`--> SPREADSHEET_ID ditemukan: ${SPREADSHEET_ID}`);
-
-// --- Debugging GOOGLE_CREDENTIALS ---
 let creds;
-const googleCredsRaw = process.env.GOOGLE_CREDENTIALS;
-if (googleCredsRaw) {
-    console.log("--> GOOGLE_CREDENTIALS ditemukan di environment, mencoba untuk parse...");
-    try {
-        creds = JSON.parse(googleCredsRaw);
-        console.log("--> Parse GOOGLE_CREDENTIALS berhasil!");
-    } catch (error) {
-        console.error("FATAL ERROR: Gagal melakukan JSON.parse pada GOOGLE_CREDENTIALS!", error.message);
-        console.error("Pastikan Anda menyalin SELURUH isi file .json, termasuk kurung kurawal '{' di awal dan '}' di akhir.");
-        process.exit(1); // Langsung hentikan aplikasi
-    }
+if (process.env.GOOGLE_CREDENTIALS) {
+    creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+    console.log("--> Kredensial Google berhasil di-parse dari environment.");
 } else {
-    console.log("--> GOOGLE_CREDENTIALS tidak ditemukan di environment, mencoba membaca file lokal...");
-    try {
-        // GANTI NAMA FILE DI BAWAH INI DENGAN NAMA FILE .JSON ANDA
-        creds = require('./gen-lang-client-0501007499-f7d012eb3e61.json');
-        console.log("--> Berhasil membaca file kredensial lokal.");
-    } catch (error) {
-        console.error("FATAL ERROR: Gagal membaca file kredensial lokal!", error.message);
-        process.exit(1);
-    }
+    // Sesuaikan nama file ini jika Anda testing di komputer lokal
+    creds = require('./nama-file-kredensial-anda.json'); 
 }
 
-// --- Debugging Inisialisasi GoogleSpreadsheet ---
-let doc;
-try {
-    doc = new GoogleSpreadsheet(SPREADSHEET_ID, {
-        /* Opsi otentikasi akan di-set di dalam fungsi */
-    });
-    console.log("--> Inisialisasi GoogleSpreadsheet berhasil!");
-} catch(error) {
-    console.error("FATAL ERROR: Gagal membuat instance GoogleSpreadsheet!", error.message);
-    process.exit(1); // Langsung hentikan aplikasi
-}
-
+// --- PERBAIKAN GOOGLE SHEETS v4 ---
+// Kredensial langsung dimasukkan saat inisialisasi
+const doc = new GoogleSpreadsheet(SPREADSHEET_ID, {
+    email: creds.client_email,
+    private_key: creds.private_key.replace(/\\n/g, '\n'),
+});
 console.log("Konfigurasi Selesai. Melanjutkan ke setup aplikasi...");
-// --- AKHIR DARI KONFIGURASI DEBUGGING ---
+// --- AKHIR DARI PERBAIKAN ---
 
-// Objek untuk menyimpan state pengguna (biarkan kosong)
+
 let userState = {};
 
-// --- FUNGSI-FUNGSI PEMBANTU ---
-async function authenticateAndLoadSheet() {
-    await doc.useServiceAccountAuth(creds);
-    await doc.loadInfo();
-    return doc.sheetsByIndex[0];
+// --- FUNGSI-FUNGSI PEMBANTU (DISESUAIKAN UNTUK v4) ---
+// Fungsi ini menjadi lebih sederhana
+async function loadSheet() {
+    await doc.loadInfo(); // Memuat properti dokumen
+    return doc.sheetsByIndex[0]; // Mengambil sheet pertama
 }
 
 async function appendToSheet(data) {
-    const sheet = await authenticateAndLoadSheet();
+    const sheet = await loadSheet();
     await sheet.addRow({
         Tanggal: data.tanggal,
         Jenis: data.jenis,
@@ -83,7 +53,7 @@ async function appendToSheet(data) {
 }
 
 async function generateReport() {
-    const sheet = await authenticateAndLoadSheet();
+    const sheet = await loadSheet();
     const rows = await sheet.getRows();
     let totalPemasukan = 0;
     let totalPengeluaran = 0;
@@ -100,17 +70,21 @@ async function generateReport() {
     return `Laporan Keuangan Anda 📊\n\nTotal Pemasukan: ${formatRp(totalPemasukan)}\nTotal Pengeluaran: ${formatRp(totalPengeluaran)}\n\n*Total Uang Sekarang: ${formatRp(sisaUang)}*`;
 }
 
-// --- LOGIKA UTAMA BOT ---
+// --- LOGIKA UTAMA BOT (Kita gunakan MessageBird sesuai pilihan terakhir) ---
 const app = express();
-app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
 
 app.post('/webhook', async (req, res) => {
-    console.log('--- PESAN BARU DITERIMA DI /webhook ---');
-    console.log('Pengirim:', req.body.From);
+    if (!req.body.message || req.body.type !== 'message.created') {
+        return res.status(200).send('OK');
+    }
+    
+    console.log('--- PESAN BARU DITERIMA ---');
+    const from = req.body.message.from;
+    const msgBody = req.body.message.content.text.trim();
+    console.log('Pengirim:', from);
+    console.log('Isi Pesan:', msgBody);
 
-    const twiml = new MessagingResponse();
-    const from = req.body.From;
-    const msgBody = req.body.Body.trim();
     const currentState = userState[from];
     let replyText = '';
 
@@ -120,13 +94,8 @@ app.post('/webhook', async (req, res) => {
             const jumlah = parseInt(parts[0], 10);
             const keterangan = parts.slice(1).join(' ');
             if (!isNaN(jumlah) && jumlah > 0 && keterangan) {
-                const newRow = {
-                    tanggal: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }),
-                    jenis: currentState === 'MENUNGGU_PEMASUKAN' ? 'Pemasukan' : 'Pengeluaran',
-                    jumlah: jumlah,
-                    keterangan: keterangan,
-                };
-                await appendToSheet(newRow);
+                const newRow = { tanggal: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }), jenis: currentState === 'MENUNGGU_PEMASUKAN' ? 'Pemasukan' : 'Pengeluaran', jumlah: jumlah, keterangan: keterangan };
+                await appendToSheet(newRow); // Memanggil fungsi yang sudah diperbaiki
                 replyText = `✅ Berhasil dicatat:\n*${newRow.jenis}:* Rp ${jumlah.toLocaleString('id-ID')} - ${keterangan}`;
                 delete userState[from];
             } else {
@@ -146,7 +115,7 @@ app.post('/webhook', async (req, res) => {
                     replyText = 'Anda memilih *Isi Pengeluaran*.\n\nSilakan kirim dengan format:\n`[jumlah] [keterangan]`\n\nContoh: `25000 Makan Siang`';
                     break;
                 case '3':
-                    replyText = await generateReport();
+                    replyText = await generateReport(); // Memanggil fungsi yang sudah diperbaiki
                     break;
                 default:
                     replyText = 'Perintah tidak dikenali. Ketik `.menu` untuk melihat pilihan yang tersedia.';
@@ -157,9 +126,18 @@ app.post('/webhook', async (req, res) => {
         console.error('Terjadi error saat memproses pesan:', error);
         replyText = 'Maaf, terjadi kesalahan di pihak server. 😔';
     }
-
-    twiml.message(replyText);
-    res.type('text/xml').send(twiml.toString());
+    
+    // Mengirim balasan (disesuaikan untuk MessageBird)
+    if (replyText && process.env.MESSAGEBIRD_API_KEY) {
+        try {
+            await axios.post('https://conversations.messagebird.com/v1/conversations/start', { to: from, type: 'text', channelId: process.env.MESSAGEBIRD_CHANNEL_ID, content: { text: replyText } }, { headers: { 'Authorization': `AccessKey ${process.env.MESSAGEBIRD_API_KEY}` } });
+            console.log('--> Balasan berhasil dikirim.');
+        } catch (error) {
+            console.error('Error saat mengirim balasan:', error.response ? error.response.data.errors : error.message);
+        }
+    }
+    
+    res.status(200).send('OK');
 });
 
 app.listen(PORT, () => {
