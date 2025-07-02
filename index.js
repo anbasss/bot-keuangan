@@ -1,45 +1,47 @@
 // =================================================================
 // KODE LENGKAP BOT KEUANGAN WHATSAPP
-// Versi Final dengan Perbaikan Google Sheets v4
+// Platform: Twilio & Railway | Database: Google Sheets
+// Versi Final - Sudah Termasuk Debugging & Perbaikan
 // =================================================================
 
 // Import library yang dibutuhkan
 const express = require('express');
 const bodyParser = require('body-parser');
-const axios = require('axios');
+const { MessagingResponse } = require('twilio').twiml; // Kembali menggunakan TwiML untuk Twilio
 const { GoogleSpreadsheet } = require('google-spreadsheet');
-const qs = require('qs');
 
 // --- KONFIGURASI ---
 console.log("Memulai proses startup dan konfigurasi...");
 const PORT = process.env.PORT || 3000;
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 let creds;
+
+// Membaca kredensial dari Environment Variables (untuk Railway)
 if (process.env.GOOGLE_CREDENTIALS) {
     creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
     console.log("--> Kredensial Google berhasil di-parse dari environment.");
 } else {
-    // Sesuaikan nama file ini jika Anda testing di komputer lokal
+    // Fallback untuk testing di komputer lokal
+    console.log("--> Membaca kredensial dari file lokal...");
+    // !!! PENTING: Ganti nama file di bawah ini dengan nama file .json Anda !!!
     creds = require('./nama-file-kredensial-anda.json'); 
 }
 
-// --- PERBAIKAN GOOGLE SHEETS v4 ---
-// Kredensial langsung dimasukkan saat inisialisasi
+// Inisialisasi Google Sheets dengan metode otentikasi v4
 const doc = new GoogleSpreadsheet(SPREADSHEET_ID, {
     email: creds.client_email,
     private_key: creds.private_key.replace(/\\n/g, '\n'),
 });
 console.log("Konfigurasi Selesai. Melanjutkan ke setup aplikasi...");
-// --- AKHIR DARI PERBAIKAN ---
 
 
+// Objek untuk menyimpan state pengguna
 let userState = {};
 
-// --- FUNGSI-FUNGSI PEMBANTU (DISESUAIKAN UNTUK v4) ---
-// Fungsi ini menjadi lebih sederhana
+// --- FUNGSI-FUNGSI PEMBANTU ---
 async function loadSheet() {
-    await doc.loadInfo(); // Memuat properti dokumen
-    return doc.sheetsByIndex[0]; // Mengambil sheet pertama
+    await doc.loadInfo();
+    return doc.sheetsByIndex[0];
 }
 
 async function appendToSheet(data) {
@@ -70,21 +72,22 @@ async function generateReport() {
     return `Laporan Keuangan Anda 📊\n\nTotal Pemasukan: ${formatRp(totalPemasukan)}\nTotal Pengeluaran: ${formatRp(totalPengeluaran)}\n\n*Total Uang Sekarang: ${formatRp(sisaUang)}*`;
 }
 
-// --- LOGIKA UTAMA BOT (Kita gunakan MessageBird sesuai pilihan terakhir) ---
+// --- LOGIKA UTAMA BOT ---
 const app = express();
-app.use(bodyParser.json());
+// Menggunakan parser untuk format Twilio
+app.use(bodyParser.urlencoded({ extended: true }));
 
 app.post('/webhook', async (req, res) => {
-    if (!req.body.message || req.body.type !== 'message.created') {
-        return res.status(200).send('OK');
-    }
+    console.log('--- PESAN BARU DITERIMA DI /webhook ---');
     
-    console.log('--- PESAN BARU DITERIMA ---');
-    const from = req.body.message.from;
-    const msgBody = req.body.message.content.text.trim();
+    // Mengambil data dari format Twilio
+    const from = req.body.From; 
+    const msgBody = req.body.Body ? req.body.Body.trim() : '';
+
     console.log('Pengirim:', from);
     console.log('Isi Pesan:', msgBody);
 
+    const twiml = new MessagingResponse();
     const currentState = userState[from];
     let replyText = '';
 
@@ -95,7 +98,7 @@ app.post('/webhook', async (req, res) => {
             const keterangan = parts.slice(1).join(' ');
             if (!isNaN(jumlah) && jumlah > 0 && keterangan) {
                 const newRow = { tanggal: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }), jenis: currentState === 'MENUNGGU_PEMASUKAN' ? 'Pemasukan' : 'Pengeluaran', jumlah: jumlah, keterangan: keterangan };
-                await appendToSheet(newRow); // Memanggil fungsi yang sudah diperbaiki
+                await appendToSheet(newRow);
                 replyText = `✅ Berhasil dicatat:\n*${newRow.jenis}:* Rp ${jumlah.toLocaleString('id-ID')} - ${keterangan}`;
                 delete userState[from];
             } else {
@@ -115,7 +118,7 @@ app.post('/webhook', async (req, res) => {
                     replyText = 'Anda memilih *Isi Pengeluaran*.\n\nSilakan kirim dengan format:\n`[jumlah] [keterangan]`\n\nContoh: `25000 Makan Siang`';
                     break;
                 case '3':
-                    replyText = await generateReport(); // Memanggil fungsi yang sudah diperbaiki
+                    replyText = await generateReport();
                     break;
                 default:
                     replyText = 'Perintah tidak dikenali. Ketik `.menu` untuk melihat pilihan yang tersedia.';
@@ -127,17 +130,9 @@ app.post('/webhook', async (req, res) => {
         replyText = 'Maaf, terjadi kesalahan di pihak server. 😔';
     }
     
-    // Mengirim balasan (disesuaikan untuk MessageBird)
-    if (replyText && process.env.MESSAGEBIRD_API_KEY) {
-        try {
-            await axios.post('https://conversations.messagebird.com/v1/conversations/start', { to: from, type: 'text', channelId: process.env.MESSAGEBIRD_CHANNEL_ID, content: { text: replyText } }, { headers: { 'Authorization': `AccessKey ${process.env.MESSAGEBIRD_API_KEY}` } });
-            console.log('--> Balasan berhasil dikirim.');
-        } catch (error) {
-            console.error('Error saat mengirim balasan:', error.response ? error.response.data.errors : error.message);
-        }
-    }
-    
-    res.status(200).send('OK');
+    // Mengirim balasan dalam format TwiML untuk Twilio
+    twiml.message(replyText);
+    res.type('text/xml').send(twiml.toString());
 });
 
 app.listen(PORT, () => {
