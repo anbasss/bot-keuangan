@@ -1,4 +1,7 @@
-// Bab 3: Kode Lengkap untuk index.js (Versi Final untuk Server)
+// =================================================================
+// KODE LENGKAP BOT KEUANGAN WHATSAPP
+// Versi Final dengan Debugging Startup
+// =================================================================
 
 // Import library yang dibutuhkan
 const express = require('express');
@@ -6,35 +9,71 @@ const bodyParser = require('body-parser');
 const { MessagingResponse } = require('twilio').twiml;
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 
-// --- KONFIGURASI ---
-// Semua kunci rahasia akan dibaca dari Environment Variables di Railway
+// --- KONFIGURASI DENGAN DEBUGGING ---
+console.log("Memulai proses startup dan konfigurasi...");
+
 const PORT = process.env.PORT || 3000;
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID; 
 
-// INI BAGIAN PALING PENTING YANG BERBEDA DARI KODE ANDA
-let creds;
-// Cek apakah variabel GOOGLE_CREDENTIALS ada (di server Railway)
-if (process.env.GOOGLE_CREDENTIALS) {
-    // Jika ada, baca dari sana
-    creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
-} else {
-    // Jika tidak ada (saat dijalankan di komputer lokal), baca dari file
-    // Pastikan nama file ini sesuai dengan file .json Anda
-    creds = require('./gen-lang-client-0501007499-f7d012eb3e61.json'); 
+// --- Debugging SPREADSHEET_ID ---
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
+if (!SPREADSHEET_ID) {
+    console.error("FATAL ERROR: Environment variable SPREADSHEET_ID tidak ditemukan atau kosong!");
+    process.exit(1); // Langsung hentikan aplikasi jika ID tidak ada
 }
-const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
+console.log(`--> SPREADSHEET_ID ditemukan: ${SPREADSHEET_ID}`);
 
+// --- Debugging GOOGLE_CREDENTIALS ---
+let creds;
+const googleCredsRaw = process.env.GOOGLE_CREDENTIALS;
+if (googleCredsRaw) {
+    console.log("--> GOOGLE_CREDENTIALS ditemukan di environment, mencoba untuk parse...");
+    try {
+        creds = JSON.parse(googleCredsRaw);
+        console.log("--> Parse GOOGLE_CREDENTIALS berhasil!");
+    } catch (error) {
+        console.error("FATAL ERROR: Gagal melakukan JSON.parse pada GOOGLE_CREDENTIALS!", error.message);
+        console.error("Pastikan Anda menyalin SELURUH isi file .json, termasuk kurung kurawal '{' di awal dan '}' di akhir.");
+        process.exit(1); // Langsung hentikan aplikasi
+    }
+} else {
+    console.log("--> GOOGLE_CREDENTIALS tidak ditemukan di environment, mencoba membaca file lokal...");
+    try {
+        // GANTI NAMA FILE DI BAWAH INI DENGAN NAMA FILE .JSON ANDA
+        creds = require('./gen-lang-client-0501007499-f7d012eb3e61.json');
+        console.log("--> Berhasil membaca file kredensial lokal.");
+    } catch (error) {
+        console.error("FATAL ERROR: Gagal membaca file kredensial lokal!", error.message);
+        process.exit(1);
+    }
+}
+
+// --- Debugging Inisialisasi GoogleSpreadsheet ---
+let doc;
+try {
+    doc = new GoogleSpreadsheet(SPREADSHEET_ID, {
+        /* Opsi otentikasi akan di-set di dalam fungsi */
+    });
+    console.log("--> Inisialisasi GoogleSpreadsheet berhasil!");
+} catch(error) {
+    console.error("FATAL ERROR: Gagal membuat instance GoogleSpreadsheet!", error.message);
+    process.exit(1); // Langsung hentikan aplikasi
+}
+
+console.log("Konfigurasi Selesai. Melanjutkan ke setup aplikasi...");
+// --- AKHIR DARI KONFIGURASI DEBUGGING ---
 
 // Objek untuk menyimpan state pengguna (biarkan kosong)
 let userState = {};
 
 // --- FUNGSI-FUNGSI PEMBANTU ---
-
-// Fungsi untuk menambah data ke Google Sheets
-async function appendToSheet(data) {
+async function authenticateAndLoadSheet() {
     await doc.useServiceAccountAuth(creds);
     await doc.loadInfo();
-    const sheet = doc.sheetsByIndex[0]; // Menggunakan sheet pertama
+    return doc.sheetsByIndex[0];
+}
+
+async function appendToSheet(data) {
+    const sheet = await authenticateAndLoadSheet();
     await sheet.addRow({
         Tanggal: data.tanggal,
         Jenis: data.jenis,
@@ -43,18 +82,12 @@ async function appendToSheet(data) {
     });
 }
 
-// Fungsi untuk membuat laporan keuangan
 async function generateReport() {
-    await doc.useServiceAccountAuth(creds);
-    await doc.loadInfo();
-    const sheet = doc.sheetsByIndex[0];
+    const sheet = await authenticateAndLoadSheet();
     const rows = await sheet.getRows();
-
     let totalPemasukan = 0;
     let totalPengeluaran = 0;
-
     rows.forEach(row => {
-        // Gunakan .get() untuk mengakses data baris dari google-spreadsheet v4
         const jumlah = parseFloat(row.get('Jumlah')) || 0;
         if (row.get('Jenis') === 'Pemasukan') {
             totalPemasukan += jumlah;
@@ -62,25 +95,22 @@ async function generateReport() {
             totalPengeluaran += jumlah;
         }
     });
-
     const sisaUang = totalPemasukan - totalPengeluaran;
     const formatRp = (angka) => `Rp ${angka.toLocaleString('id-ID')}`;
-
     return `Laporan Keuangan Anda 📊\n\nTotal Pemasukan: ${formatRp(totalPemasukan)}\nTotal Pengeluaran: ${formatRp(totalPengeluaran)}\n\n*Total Uang Sekarang: ${formatRp(sisaUang)}*`;
 }
 
-
 // --- LOGIKA UTAMA BOT ---
-
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 
 app.post('/webhook', async (req, res) => {
-    console.log('--- PESAN BARU DITERIMA DI /webhook ---'); // <--- TAMBAHKAN BARIS INI
-    console.log('Pengirim:', req.body.From);     
+    console.log('--- PESAN BARU DITERIMA DI /webhook ---');
+    console.log('Pengirim:', req.body.From);
+
     const twiml = new MessagingResponse();
-    const from = req.body.From; 
-    const msgBody = req.body.Body.trim(); 
+    const from = req.body.From;
+    const msgBody = req.body.Body.trim();
     const currentState = userState[from];
     let replyText = '';
 
@@ -89,7 +119,6 @@ app.post('/webhook', async (req, res) => {
             const parts = msgBody.split(' ');
             const jumlah = parseInt(parts[0], 10);
             const keterangan = parts.slice(1).join(' ');
-
             if (!isNaN(jumlah) && jumlah > 0 && keterangan) {
                 const newRow = {
                     tanggal: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }),
@@ -97,7 +126,6 @@ app.post('/webhook', async (req, res) => {
                     jumlah: jumlah,
                     keterangan: keterangan,
                 };
-                
                 await appendToSheet(newRow);
                 replyText = `✅ Berhasil dicatat:\n*${newRow.jenis}:* Rp ${jumlah.toLocaleString('id-ID')} - ${keterangan}`;
                 delete userState[from];
@@ -126,7 +154,7 @@ app.post('/webhook', async (req, res) => {
             }
         }
     } catch (error) {
-        console.error('Terjadi error:', error);
+        console.error('Terjadi error saat memproses pesan:', error);
         replyText = 'Maaf, terjadi kesalahan di pihak server. 😔';
     }
 
@@ -135,5 +163,5 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Server berjalan di port ${PORT}`);
+    console.log(`--> Server siap dan berjalan di port ${PORT}`);
 });
