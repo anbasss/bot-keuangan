@@ -1,12 +1,13 @@
 // =================================================================
 // KODE LENGKAP BOT KEUANGAN WHATSAPP
-// Versi Final - Dengan Perbaikan Otentikasi Google Sheets v4
+// Versi Final - Dengan Perbaikan Otentikasi Google Sheets v4 (JWT Auth)
 // =================================================================
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const { MessagingResponse } = require('twilio').twiml;
 const { GoogleSpreadsheet } = require('google-spreadsheet');
+const { JWT } = require('google-auth-library'); // <-- LIBRARY BARU UNTUK OTENTIKASI
 
 // --- KONFIGURASI ---
 console.log("Memulai proses startup dan konfigurasi...");
@@ -22,26 +23,31 @@ if (process.env.GOOGLE_CREDENTIALS) {
     creds = require('./nama-file-kredensial-anda.json'); 
 }
 
-// --- PERBAIKAN GOOGLE SHEETS v4 ---
-// Inisialisasi doc hanya dengan ID. Otentikasi akan dilakukan di dalam fungsi.
-const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
+// --- PERBAIKAN FINAL GOOGLE SHEETS v4 ---
+// Menggunakan metode otentikasi JWT yang direkomendasikan
+const serviceAccountAuth = new JWT({
+    email: creds.client_email,
+    key: creds.private_key.replace(/\\n/g, '\n'),
+    scopes: [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive.file',
+    ],
+});
+
+const doc = new GoogleSpreadsheet(SPREADSHEET_ID, serviceAccountAuth);
 console.log("Konfigurasi Selesai. Melanjutkan ke setup aplikasi...");
+// --- AKHIR DARI PERBAIKAN FINAL ---
 
 let userState = {};
 
-// --- FUNGSI-FUNGSI PEMBANTU (DISESUAIKAN UNTUK v4 YANG BENAR) ---
-async function authenticateAndLoadSheet() {
-    // Otentikasi dilakukan di sini dengan cara yang benar untuk v4
-    await doc.useServiceAccountAuth({
-        client_email: creds.client_email,
-        private_key: creds.private_key.replace(/\\n/g, '\n'),
-    });
-    await doc.loadInfo(); // Memuat properti dokumen
-    return doc.sheetsByIndex[0]; // Mengambil sheet pertama
+// --- FUNGSI-FUNGSI PEMBANTU ---
+async function loadSheet() {
+    await doc.loadInfo();
+    return doc.sheetsByIndex[0];
 }
 
 async function appendToSheet(data) {
-    const sheet = await authenticateAndLoadSheet();
+    const sheet = await loadSheet();
     await sheet.addRow({
         Tanggal: data.tanggal,
         Jenis: data.jenis,
@@ -51,7 +57,7 @@ async function appendToSheet(data) {
 }
 
 async function generateReport() {
-    const sheet = await authenticateAndLoadSheet();
+    const sheet = await loadSheet();
     const rows = await sheet.getRows();
     let totalPemasukan = 0;
     let totalPengeluaran = 0;

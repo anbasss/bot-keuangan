@@ -12,6 +12,7 @@
   "dependencies": {
     "body-parser": "^2.2.0",
     "express": "^5.1.0",
+    "google-auth-library": "^9.15.1",
     "google-spreadsheet": "^4.1.4",
     "twilio": "^5.7.1"
   }
