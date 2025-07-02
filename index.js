@@ -1,13 +1,13 @@
 // =================================================================
 // KODE LENGKAP BOT KEUANGAN WHATSAPP
 // Platform: Twilio & Railway | Database: Google Sheets
-// Versi Final - FIX: Invalid Auth Error
+// Versi Final - Sudah Termasuk Debugging & Perbaikan
 // =================================================================
 
 // Import library yang dibutuhkan
 const express = require('express');
 const bodyParser = require('body-parser');
-const { MessagingResponse } = require('twilio').twiml;
+const { MessagingResponse } = require('twilio').twiml; // Kembali menggunakan TwiML untuk Twilio
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 
 // --- KONFIGURASI ---
@@ -21,24 +21,25 @@ if (process.env.GOOGLE_CREDENTIALS) {
     creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
     console.log("--> Kredensial Google berhasil di-parse dari environment.");
 } else {
-    // Fallback untuk testing lokal
+    // Fallback untuk testing di komputer lokal
     console.log("--> Membaca kredensial dari file lokal...");
-    creds = require('./nama-file-kredensial-anda.json');
+    // !!! PENTING: Ganti nama file di bawah ini dengan nama file .json Anda !!!
+    creds = require('./nama-file-kredensial-anda.json'); 
 }
 
-// Inisialisasi Google Sheets (tanpa kredensial)
-const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
+// Inisialisasi Google Sheets dengan metode otentikasi v4
+const doc = new GoogleSpreadsheet(SPREADSHEET_ID, {
+    email: creds.client_email,
+    private_key: creds.private_key.replace(/\\n/g, '\n'),
+});
 console.log("Konfigurasi Selesai. Melanjutkan ke setup aplikasi...");
+
 
 // Objek untuk menyimpan state pengguna
 let userState = {};
 
 // --- FUNGSI-FUNGSI PEMBANTU ---
 async function loadSheet() {
-    await doc.useServiceAccountAuth({
-        client_email: creds.client_email,
-        private_key: creds.private_key.replace(/\\n/g, '\n'),
-    });
     await doc.loadInfo();
     return doc.sheetsByIndex[0];
 }
@@ -73,12 +74,14 @@ async function generateReport() {
 
 // --- LOGIKA UTAMA BOT ---
 const app = express();
+// Menggunakan parser untuk format Twilio
 app.use(bodyParser.urlencoded({ extended: true }));
 
 app.post('/webhook', async (req, res) => {
     console.log('--- PESAN BARU DITERIMA DI /webhook ---');
     
-    const from = req.body.From;
+    // Mengambil data dari format Twilio
+    const from = req.body.From; 
     const msgBody = req.body.Body ? req.body.Body.trim() : '';
 
     console.log('Pengirim:', from);
@@ -94,12 +97,7 @@ app.post('/webhook', async (req, res) => {
             const jumlah = parseInt(parts[0], 10);
             const keterangan = parts.slice(1).join(' ');
             if (!isNaN(jumlah) && jumlah > 0 && keterangan) {
-                const newRow = {
-                    tanggal: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }),
-                    jenis: currentState === 'MENUNGGU_PEMASUKAN' ? 'Pemasukan' : 'Pengeluaran',
-                    jumlah: jumlah,
-                    keterangan: keterangan,
-                };
+                const newRow = { tanggal: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }), jenis: currentState === 'MENUNGGU_PEMASUKAN' ? 'Pemasukan' : 'Pengeluaran', jumlah: jumlah, keterangan: keterangan };
                 await appendToSheet(newRow);
                 replyText = `✅ Berhasil dicatat:\n*${newRow.jenis}:* Rp ${jumlah.toLocaleString('id-ID')} - ${keterangan}`;
                 delete userState[from];
@@ -131,7 +129,8 @@ app.post('/webhook', async (req, res) => {
         console.error('Terjadi error saat memproses pesan:', error);
         replyText = 'Maaf, terjadi kesalahan di pihak server. 😔';
     }
-
+    
+    // Mengirim balasan dalam format TwiML untuk Twilio
     twiml.message(replyText);
     res.type('text/xml').send(twiml.toString());
 });
