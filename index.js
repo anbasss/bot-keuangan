@@ -1,6 +1,6 @@
 // =================================================================
 // KODE LENGKAP BOT KEUANGAN WHATSAPP
-// Versi Final - Twilio & Railway
+// Versi Final - Twilio & Railway dengan Konfirmasi 2 Pesan
 // =================================================================
 
 const express = require('express');
@@ -23,20 +23,16 @@ if (process.env.GOOGLE_CREDENTIALS) {
     creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
 } else {
     // Sesuaikan nama file ini jika Anda testing di komputer lokal
-    creds = require('./gen-lang-client-0501007499-f7d012eb3e61.json'); 
+    creds = require('./nama-file-kredensial-anda.json'); 
 }
 
-// Otentikasi Google Sheets v4 yang benar menggunakan JWT
 const serviceAccountAuth = new JWT({
     email: creds.client_email,
     key: creds.private_key.replace(/\\n/g, '\n'),
-    scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive.file',
-    ],
+    scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.file'],
 });
-const doc = new GoogleSpreadsheet(SPREADSHEET_ID, serviceAccountAuth);
 
+const doc = new GoogleSpreadsheet(SPREADSHEET_ID, serviceAccountAuth);
 let userState = {};
 
 // --- FUNGSI-FUNGSI PEMBANTU ---
@@ -53,7 +49,7 @@ async function sendTwilioMessage(to, messageBody) {
         await axios.post(endpoint, qs.stringify(data), { auth: { username: TWILIO_ACCOUNT_SID, password: TWILIO_AUTH_TOKEN } });
         console.log(`--> Pesan proaktif berhasil dikirim ke ${to}`);
     } catch (error) {
-        console.error("Error saat mengirim pesan via Twilio API:", error.response ? error.response.data : error.message);
+        console.error("Error saat mengirim pesan via Twilio API:", error.response ? error.response.data : "Unknown Error");
     }
 }
 
@@ -69,8 +65,7 @@ app.post('/webhook', async (req, res) => {
 
     const twiml = new MessagingResponse();
     const currentState = userState[from];
-    let replyText = '';
-
+    
     try {
         if (currentState === 'MENUNGGU_PEMASUKAN' || currentState === 'MENUNGGU_PENGELUARAN') {
             const parts = msgBody.split(' ');
@@ -78,44 +73,55 @@ app.post('/webhook', async (req, res) => {
             const keterangan = parts.slice(1).join(' ');
 
             if (!isNaN(jumlah) && jumlah > 0 && keterangan) {
-                // Balas dulu, baru proses
+                // 1. Balas dulu dengan pesan "sedang diproses" secara instan
                 const processingMessage = `⏳ Siap! Data _'${jumlah} ${keterangan}'_ sedang diproses...`;
                 twiml.message(processingMessage);
                 res.type('text/xml').send(twiml.toString());
 
-                // Setelah balasan terkirim, jalankan tugas berat di latar belakang
-                const newRow = { tanggal: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }), jenis: currentState === 'MENUNGGU_PEMASUKAN' ? 'Pemasukan' : 'Pengeluaran', jumlah: jumlah, keterangan: keterangan };
-                appendToSheet(newRow)
-                    .then(() => console.log(`--> SUKSES: Data dari ${from} berhasil disimpan.`))
-                    .catch(dbError => console.error(`--> GAGAL: Tidak bisa menyimpan ke Google Sheets untuk ${from}.`, dbError));
-                
+                // 2. Lakukan tugas berat di latar belakang SETELAH membalas
+                try {
+                    const newRow = { tanggal: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }), jenis: currentState === 'MENUNGGU_PEMASUKAN' ? 'Pemasukan' : 'Pengeluaran', jumlah: jumlah, keterangan: keterangan };
+                    await appendToSheet(newRow);
+                    console.log(`--> SUKSES: Data dari ${from} berhasil disimpan.`);
+                    // 3. Kirim pesan kedua sebagai konfirmasi sukses
+                    const successMessage = `✅ Berhasil dicatat:\n*${newRow.jenis}:* Rp ${jumlah.toLocaleString('id-ID')} - ${keterangan}`;
+                    await sendTwilioMessage(from, successMessage);
+                } catch (dbError) {
+                    console.error(`--> GAGAL: Tidak bisa menyimpan ke Google Sheets untuk ${from}.`, dbError);
+                     // Kirim pesan kedua sebagai notifikasi error
+                    await sendTwilioMessage(from, `❌ Maaf, terjadi kesalahan saat mencoba menyimpan data Anda.`);
+                }
                 delete userState[from];
             } else {
-                replyText = 'Format salah. Mohon masukkan lagi.\nContoh: `50000 Gaji dari project`';
-                twiml.message(replyText);
+                twiml.message('Format salah. Mohon masukkan lagi.\nContoh: `50000 Gaji dari project`');
                 res.type('text/xml').send(twiml.toString());
             }
         } else {
+            // Untuk menu, 1, 2, dan 3, logikanya dipisah agar lebih rapi
+            let replyText = '';
             switch (msgBody.toLowerCase()) {
                 case '.menu':
+                    replyText = 'Selamat datang di Bot Keuangan!\n\nSilakan pilih menu:\n*1*. Isi Pemasukan 💰\n*2*. Isi Pengeluaran 💸\n*3*. Tampilkan Laporan 📊\n\nKetik nomornya untuk memilih.';
+                    twiml.message(replyText);
+                    res.type('text/xml').send(twiml.toString());
+                    break;
                 case '1':
+                    userState[from] = 'MENUNGGU_PEMASUKAN';
+                    replyText = 'Anda memilih *Isi Pemasukan*.\n\nSilakan kirim dengan format:\n`[jumlah] [keterangan]`\n\nContoh: `500000 Gaji Bulanan`';
+                    twiml.message(replyText);
+                    res.type('text/xml').send(twiml.toString());
+                    break;
                 case '2':
-                    if (msgBody.toLowerCase() === '.menu') {
-                        replyText = 'Selamat datang di Bot Keuangan!\n\nSilakan pilih menu:\n*1*. Isi Pemasukan 💰\n*2*. Isi Pengeluaran 💸\n*3*. Tampilkan Laporan 📊\n\nKetik nomornya untuk memilih.';
-                    } else if (msgBody === '1') {
-                        userState[from] = 'MENUNGGU_PEMASUKAN';
-                        replyText = 'Anda memilih *Isi Pemasukan*.\n\nSilakan kirim dengan format:\n`[jumlah] [keterangan]`\n\nContoh: `500000 Gaji Bulanan`';
-                    } else if (msgBody === '2') {
-                        userState[from] = 'MENUNGGU_PENGELUARAN';
-                        replyText = 'Anda memilih *Isi Pengeluaran*.\n\nSilakan kirim dengan format:\n`[jumlah] [keterangan]`\n\nContoh: `25000 Makan Siang`';
-                    }
+                    userState[from] = 'MENUNGGU_PENGELUARAN';
+                    replyText = 'Anda memilih *Isi Pengeluaran*.\n\nSilakan kirim dengan format:\n`[jumlah] [keterangan]`\n\nContoh: `25000 Makan Siang`';
                     twiml.message(replyText);
                     res.type('text/xml').send(twiml.toString());
                     break;
                 case '3':
+                    // Balas dulu, proses, lalu kirim hasil
                     twiml.message('⏳ Sedang mengambil data laporan, mohon tunggu...');
                     res.type('text/xml').send(twiml.toString());
-
+                    
                     const report = await generateReport();
                     await sendTwilioMessage(from, report); 
                     break;
@@ -127,10 +133,10 @@ app.post('/webhook', async (req, res) => {
             }
         }
     } catch (error) {
-        console.error('Terjadi error saat memproses pesan:', error);
-        replyText = 'Maaf, terjadi kesalahan di pihak server. 😔';
-        twiml.message(replyText);
-        res.type('text/xml').send(twiml.toString());
+        console.error('Terjadi error fatal saat memproses pesan:', error);
+        // Mencoba mengirim pesan error terakhir jika memungkinkan
+        await sendTwilioMessage(from, 'Maaf, terjadi kesalahan besar yang tidak terduga di pihak server. 😔');
+        res.status(500).send();
     }
 });
 
